@@ -38,7 +38,42 @@ contract PRM {
 }
 ```
 
-The total gas estimation for the publishing the contract on the Ethereum blockchain as of 2/23/2018 is `X gas`.
+The total gas estimation for the publishing the contract on the Ethereum blockchain as of 2/26/2018 is `986843 gas`.
+
+#### photoAsset Struct
+
+Struct's in solidity act as objects with strictly variables contained within. Since the photo assets within the `PRMContract` contain a lot of variables it makes sense to store them within a `struct`.
+
+```js
+struct PhotoAsset {
+    //A photo's sale price in Ethereum or the current auction's highest offer
+    uint256 photoPrice;
+    //A photo's sale price in PRM Tokens or the current auction's highest offer
+    uint256 photoTokenPrice;
+    //The auction's expiry date, if available
+    uint256 expiryDate;
+    //The sale type discerning a Resale from a Sale
+    bool saleType;
+    //The photo's current owner
+    address owner;
+    //The last & highest bidder of the auction, if available
+    address lastBidder;
+}
+```
+
+#### isAdmin Modifier
+
+Checks whether the caller of the function is the address that created the smart contract. Used for verification in sensitive functions such as `setPRMTokenAddress(address)`.
+
+```js
+modifier isAdmin() {
+    require(msg.sender == admin);
+    //Continue executing rest of method body
+    _;
+}
+```
+
+> Modifiers are called prior to a function's execution, with the `_` character marking the placement of a function's body.
 
 #### setPRMTokenAddress(address)
 
@@ -71,9 +106,12 @@ The gas estimation of the above function as of 2/23/2018 is `53286 gas`.
 
 Retrieves the information associated with a photo ID. The `result` variable within a web3 call is an array with the values stored in the same order as they appear on the below function
 
+(Photo's price in Ethereum, Photo's price in PRM Tokens, Photo's Auction Expiry Date, Photo's Sale Type, Photo's Owner, Photo's Last Auction Bidder)
+
 ```js
 function getPhotoInfo(uint256 _photoID) external view returns (uint256, uint256, uint256, bool, address, address) {
-    //TODO
+    PhotoAsset memory photo = photoAssets[_photoID];
+    return (photo.photoPrice, photo.photoTokenPrice, photo.expiryDate, photo.saleType, photo.owner, photo.lastBidder);
 }
 ```
 
@@ -84,10 +122,15 @@ There is no gas cost associated with retrieving data from the blockchain.
 Upload photo to the PRM network & emit an event for the server to log the photo ID on its database.
 
 ```js
-function photoUpload(uint256 _salePrice, bool _isToken) external {
+function photoUpload(uint256 _saleType, uint256 _salePrice, bool _isToken) external {
     photoAssets[incrementalID].owner = msg.sender;
-    photoSale(_salePrice, incrementalID, _isToken);
-    //TODO: Add other types of sales
+    if (_saleType == 1) {
+        photoSale(_salePrice, incrementalID, _isToken);
+    } else if (_saleType == 2) {
+        photoResale(_salePrice, incrementalID, _isToken);
+    } else if (_saleType > 2) {
+        photoAuction(_salePrice, _saleType, incrementalID, _isToken);
+    }
     PhotoUpload(msg.sender, incrementalID);
     incrementalID++;
 }
@@ -118,7 +161,7 @@ function photoSale(uint256 _salePrice, uint256 _photoID, bool _isToken) public {
 
 The gas estimation of the above function as of 2/23/2018 is `42232 gas`.
 
-The total gas estimation of the `photoUpload(uint256 _salePrice, bool _isToken)` function if this option is specified is `65970 gas` as of 2/23/2018.
+The total gas estimation of the `photoUpload(uint256 _saleType, uint256 _salePrice, bool _isToken)` function if this option is specified is `65970 gas` as of 2/23/2018.
 
 #### photoResale(uint256, uint256, bool)
 
@@ -126,13 +169,20 @@ Enable the resale of a photo by specifying the amount of Ether or Tokens to pric
 
 ```js
 function photoResale(uint256 _resalePrice, uint256 _photoID, bool _isToken) public {
-    //TODO
+    PhotoAsset storage asset = photoAssets[_photoID];
+    require(msg.sender == asset.owner);
+    if (_isToken) {
+        asset.photoTokenPrice = _resalePrice;
+    } else {
+        asset.photoPrice = _resalePrice;
+    }
+    asset.saleType = true;
 }
 ```
 
-The gas estimation of the above function as of 2/23/2018 is `X gas`.
+The gas estimation of the above function as of 2/25/2018 is `47479 gas`.
 
-The total gas estimation of the `photoUpload(uint256 _salePrice, bool _isToken)` function if this option is specified is `X gas` as of 2/23/2018.
+The total gas estimation of the `photoUpload(uint256 _saleType, uint256 _salePrice, bool _isToken)` function if this option is specified is `75223 gas` as of 2/25/2018.
 
 #### photoAuction(uint256, uint256, uint256, bool)
 
@@ -140,13 +190,20 @@ Enable the auction of a photo by specifying the amount of Ether or Tokens to pri
 
 ```js
 function photoAuction(uint256 _startingBid, uint256 _auctionDuration, uint256 _photoID, bool _isToken) public {
-    //TODO
+    PhotoAsset storage asset = photoAssets[_photoID];
+    require(msg.sender == asset.owner);
+    if (_isToken) {
+        asset.photoTokenPrice = _startingBid;
+    } else {
+        asset.photoPrice = _startingBid;
+    }
+    asset.expiryDate = now + (1 hours * _auctionDuration);
 }
 ```
 
-The gas estimation of the above function as of 2/23/2018 is `X gas`.
+The gas estimation of the above function as of 2/25/2018 is `62399 gas`.
 
-The total gas estimation of the `photoUpload(uint256 _salePrice, bool _isToken)` function if this option is specified is `X gas` as of 2/23/2018.
+The total gas estimation of the `photoUpload(uint256 _saleType, uint256 _salePrice, bool _isToken)` function if this option is specified is `90050 gas` as of 2/25/2018.
 
 #### bidOnAuction(uint256, uint256)
 
@@ -154,13 +211,28 @@ Place a bid on an on-going auction either in PRM tokens or Ether.
 
 ```js
 function bidOnAuction(uint256 _photoID, uint256 _tokenAmount) external payable {
-    //TODO
+    PhotoAsset storage asset = photoAssets[_photoID];
+    assert(asset.expiryDate > now);
+    if (_tokenAmount > asset.photoTokenPrice) {
+        PRMToken tokenObject = PRMToken(PRMTokenAddress);
+        tokenObject.refundAndBid(asset.lastBidder, asset.photoTokenPrice, msg.sender, _tokenAmount);
+        asset.photoTokenPrice = _tokenAmount;
+        asset.lastBidder = msg.sender;
+        PhotoBid(_photoID, _tokenAmount);
+    } else if (msg.value > asset.photoPrice) {
+        asset.lastBidder.transfer(asset.photoPrice);
+        asset.photoPrice = msg.value;
+        asset.lastBidder = msg.sender;
+        PhotoBid(_photoID, msg.value);
+    } else {
+        revert();
+    }
 }
 ```
 
-The gas estimation of the above function as of 2/23/2018 is `X gas` for Ethereum bids.
+The gas estimation of the above function as of 2/26/2018 is `57461 gas` for Ethereum bids.
 
-The gas estimation of the above function as of 2/23/2018 is `X gas` for PRM Token bids.
+The gas estimation of the above function as of 2/26/2018 is `98664 gas` for PRM Token bids.
 
 #### purchaseUsageRight(uint256, uint256)
 
@@ -168,13 +240,24 @@ Purchase usage right of a photo currently offered up for re-sale with either PRM
 
 ```js
 function purchaseUsageRight(uint256 _photoID, uint256 _tokenAmount) external payable {
-    //TODO
+    PhotoAsset storage asset = photoAssets[_photoID];
+    assert(asset.saleType);
+    if (_tokenAmount == asset.photoTokenPrice && asset.photoTokenPrice > 0) {
+        PRMToken tokenObject = PRMToken(PRMTokenAddress);
+        tokenObject.saleTransfer(msg.sender, _tokenAmount, asset.owner);
+        PhotoRelease(msg.sender, _photoID);
+    } else if (msg.value == asset.photoPrice && asset.photoPrice > 0) {
+        asset.owner.transfer(msg.value);
+        PhotoRelease(msg.sender, _photoID);
+    } else {
+        revert();
+    }
 }
 ```
 
-The gas estimation of the above function as of 2/23/2018 is `X gas` for Ethereum purchases.
+The gas estimation of the above function as of 2/25/2018 is `32540 gas` for Ethereum purchases.
 
-The gas estimation of the above function as of 2/23/2018 is `X gas` for PRM Token purchases.
+The gas estimation of the above function as of 2/25/2018 is `38508 gas` for PRM Token purchases.
 
 #### purchaseOwnershipRight(uint256, uint256)
 
@@ -183,6 +266,7 @@ Purchase ownership right of a photo currently offered up for sale with either PR
 ```js
 function purchaseOwnershipRight(uint256 _photoID, uint256 _tokenAmount) external payable {
     PhotoAsset storage asset = photoAssets[_photoID];
+    assert(!asset.saleType && asset.expiryDate == 0);
     if (_tokenAmount == asset.photoTokenPrice && asset.photoTokenPrice > 0) {
         PRMToken tokenObject = PRMToken(PRMTokenAddress);
         tokenObject.saleTransfer(msg.sender, _tokenAmount, asset.owner);
@@ -200,9 +284,9 @@ function purchaseOwnershipRight(uint256 _photoID, uint256 _tokenAmount) external
 }
 ```
 
-The gas estimation of the above function as of 2/23/2018 is `25639 gas` for Ethereum purchases.
+The gas estimation of the above function as of 2/25/2018 is `28639 gas` for Ethereum purchases.
 
-The gas estimation of the above function as of 2/23/2018 is `31624 gas` for PRM Token purchases.
+The gas estimation of the above function as of 2/25/2018 is `34624 gas` for PRM Token purchases.
 
 #### finalizeAuction(uint256)
 
@@ -210,13 +294,44 @@ Finalize an auction that has expired & reward the owner with the highest bet eit
 
 ```js
 function finalizeAuction(uint256 _photoID) external {
-    //TODO
+    PhotoAsset storage asset = photoAssets[_photoID];
+    assert(asset.expiryDate < now && (asset.lastBidder == msg.sender || (msg.sender == asset.owner && asset.lastBidder == 0x0)));
+    if (asset.photoPrice > 0) {
+        if (asset.lastBidder != 0x0) {
+          asset.owner.transfer(asset.photoPrice);
+          PhotoOwnershipTransfer(asset.lastBidder, asset.owner, _photoID);
+          asset.owner = asset.lastBidder;
+          asset.lastBidder = 0x0;
+        }
+        asset.photoPrice = 0;
+        asset.expiryDate = 0;
+    } else if (asset.photoTokenPrice > 0) {
+        if (asset.lastBidder != 0x0) {
+          PRMToken tokenObject = PRMToken(PRMTokenAddress);
+          tokenObject.releaseBid(asset.owner, asset.photoTokenPrice);
+          PhotoOwnershipTransfer(asset.lastBidder, asset.owner, _photoID);
+          asset.owner = asset.lastBidder;
+          asset.lastBidder = 0x0;
+        }
+        asset.photoTokenPrice = 0;
+        asset.expiryDate = 0;
+    }
 }
 ```
 
-The gas estimation of the above function as of 2/23/2018 is `X gas` for Ethereum purchases.
+The gas estimation of the above function as of 2/26/2018 is `40576 gas` for Ethereum purchases.
 
-The gas estimation of the above function as of 2/23/2018 is `X gas` for PRM Token purchases.
+The gas estimation of the above function as of 2/26/2018 is `56389 gas` for PRM Token purchases.
+
+#### Fallback function (function())
+
+The fallback function is called whenever Ether is sent to the smart contract without any bytecode associated with it. It currently reverts the transaction & returns the Ether to the sender.
+
+```js
+function() public payable {
+    revert();
+}
+```
 
 ### PRM Token Contract
 
@@ -486,11 +601,97 @@ function getBlockchainData() {
 
 ### Uploading a photo
 
-`TODO`
+Before initiating the upload of the photo to the server, first execute the smart contract's upload function on the user's side. The function takes in 3 arguments, the sale's type, the photo's price & whether it is a token or an Ether sale.
+
+The sale's type is represented by an `unsigned integer` & reflects a simple upload if it is equal to 0, an ownership sale if it is equal to 1, a resale of usage rights if it is equal to 2 & an auction if it is above 2. In order to save gas efficiency, the same `unsigned integer` used for checking the sale type is also used as the auction's duration, so auctions can only start from 3 hours & up with the sale type reflecting the hours the auction is in effect.
+
+An example snippet for an auction with a duration of 24 hours & a minimum bet of 1 Ether can be found below.
+
+!> Any amount retrieved from the user needs to factor in the number of decimals of the perspective currency. If for example the user wishes to sell the photo at 1 Ether, the number 1 \* 10\*\*18 should be fed into the contract function. Accordingly, if the user wishes to sell the photo at 1 PRM Token, the number 1 \* 10\*\*numberOfDecimals should be fed into the contract function.
+
+> A library handling big numbers should be used browser-side to avoid any overflows or underflows when performing dangerous functions such as `Math.pow(10,18)`.
+
+```js
+let contractInstance; //Contract object acquired from web3
+
+let saleType = 24;
+let salePrice = 1 * Math.pow(10,18);
+let isToken = false;
+
+contractInstance.photoUpload(saleType, salePrice, isToken, function(err,result) {
+  if (!err) {
+    ...;
+  } else {
+    //err variable contains an error object with an accompanying error message
+    console.error(err);
+    alert("TX Rejected/Error Occured");
+  }
+});
+```
+
+After successfully broadcasting the transaction to the network, the user then should be prompted to upload his desired picture. While the picture is being uploaded the server should initiate a `setInterval` on the back-end that waits for the latest unoccupied `photoID` included in a photo upload event by the user's address.
+
+!> Although someone could potentially include a fake address within his upload payload and attempt to upload a picture without actually registering it on the blockchain by using another user's `photoID`, it has no use whatsoever as all transactions take place on the blockchain & another person would get the photo reward instead of the malicious party.
+
+The above issue can also be nullified by verifying a signed message by the user's private key but that adds unnecessary overhead to the user experience & is not recommended.
+
+> The below back-end snippet takes into account that the API call to the server included the localWeb3.eth.defaultAccount variable.
+
+```js
+let contractInstance; //Contract object acquired from web3
+
+let address = request.address;
+
+let watcher = contractInstance.PhotoUpload({_uploader:address});
+
+let photoID;
+
+watcher.watch(function (error, result){
+  if (!error) {
+    photoID = result.args._photoID;
+    successCallback(photoID);
+  }
+});
+
+setTimeout(function(){
+  watcher.stopWatching();
+  watcher = null;
+  errorCallback("Watcher Timeout");
+}, 4*15000);//4 * 15 Seconds (Median Ethereum Block Time as of 2/26/2018) reflects 4 blocks having been mined
+```
+
+After the successCallback has been fired, the uploaded picture can now be assigned the `photoID` correctly. If the errorCallback is called, the server should delete the image from its database.
 
 ### Buyer Interactions
 
-`TODO`
+After detecting the type of sale the photo is up for on the front-end & executing the appropriate contract object function found in this documentation, the back-end should initiate a watcher that detects if the photo has been released for download to the buyer.
+
+```js
+let contractInstance; //Contract object acquired from web3
+
+let address = request.address;
+
+let watcher = contractInstance.PhotoRelease({_viewer:address});
+
+let photoID;
+
+watcher.watch(function (error, result){
+  if (!error) {
+    photoID = result.args._photoID;
+    successCallback(photoID);
+  }
+});
+
+setTimeout(function(){
+  watcher.stopWatching();
+  watcher = null;
+  errorCallback("Watcher Timeout");
+}, 4*15000);//4 * 15 Seconds (Median Ethereum Block Time as of 2/26/2018) reflects 4 blocks having been mined
+```
+
+Similar concept to the PhotoUpload event.
+
+> Since auctions end asynchronously, the watcher should be initiated when the user attempts to claim the auction within your platform. Only the latest bidder is allowed to finalize the auction.
 
 ## Built With
 
